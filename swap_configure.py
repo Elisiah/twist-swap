@@ -29,7 +29,6 @@ def base_offset(args):
 
 def patch_ld(ld, ld_path, base_off):
     if base_off:
-        # move the two set addresses so the rest follow
         for segment, vanilla_address in ((".entry", VANILLA_ENTRY), (".main", VANILLA_ENTRY + 0x50)):
             old_line = f"    {segment} 0x{vanilla_address:08X} : AT("
             ld = ld.replace(old_line, f"    {segment} 0x{vanilla_address + base_off:08X} : AT(", 1)
