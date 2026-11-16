@@ -12,6 +12,14 @@ SWITCHER_C_OBJECT = "build/swap/swap.c.o"
 SWITCHER_C_ENTRY_SOURCE = "swap/c/swap_entry.s"        
 SWITCHER_C_ENTRY_OBJECT = "build/swap/swap_entry.s.o"
 
+# the asset pool is what takes up the space, but roughly 300Kb is never used
+# so I'll steal from that to make space for the game swapping.c code
+POOL_SOURCE = "asm/data/assets0Bss.bss.s"
+SHRUNK_POOL_SOURCE = "build/swap/assets0Bss.bss.s"
+SHRUNK_POOL_OBJECT = "build/swap/assets0Bss.bss.s.o"
+VANILLA_POOL_SIZE = 0x154020
+SWAP_RESERVE = 0x1000
+
 # vanilla CT1 addresses that have to move
 VANILLA_ENTRY = 0x80025C00    # .entry
 VANILLA_ZBUFFER = 0x80000400  # gfxZBuffer
@@ -51,9 +59,18 @@ def patch_ld(ld, ld_path, base_off, swap):
 
     if swap:
         main_code_start = "        main_TEXT_START = .;\n"
+        pool_line = "        build/asm/data/assets0Bss.bss.s.o(.bss);\n"
+
         placed = (f"        {SWITCHER_C_ENTRY_OBJECT}(.text .data .bss);\n"
                   f"        {SWITCHER_C_OBJECT}(.text .data .rodata .bss COMMON);\n")
         ld = ld.replace(main_code_start, main_code_start + placed, 1)
+
+        ld = ld.replace(pool_line, f"        {SHRUNK_POOL_OBJECT}(.bss);\n", 1)
+
+        # fail the build if CT1 goes past its 4MB
+        ct1_ram_end = 0x80400000 + base_off
+        ld = ld.replace("\n    /DISCARD/ :",
+                        f"\n    ASSERT(assets0_BSS_END <= 0x{ct1_ram_end:08X}, \"CT1 too big\")\n    /DISCARD/ :", 1)
     return ld
 
 
@@ -80,6 +97,17 @@ def add_objects(build, o_files, swap):
     if not swap:
         return
     from pathlib import Path
+
+    # ensure space for frambuff
+    pool_text = open(POOL_SOURCE, encoding="utf-8").read()
+    old_space = f".space 0x{VANILLA_POOL_SIZE:X}"
+    pool_text = pool_text.replace(old_space, f".space 0x{VANILLA_POOL_SIZE - SWAP_RESERVE:X}")
+    pool_text = pool_text.replace("dlabel gFrameBuffers", ".balign 64\ndlabel gFrameBuffers")
+    os.makedirs(os.path.dirname(SHRUNK_POOL_SOURCE), exist_ok=True)
+    open(SHRUNK_POOL_SOURCE, "w", encoding="utf-8").write(pool_text)
+    build(Path(SHRUNK_POOL_OBJECT), [Path(SHRUNK_POOL_SOURCE)], "s_file")
+    o_files.append(SHRUNK_POOL_OBJECT)
+
     build(Path(SWITCHER_C_ENTRY_OBJECT), [Path(SWITCHER_C_ENTRY_SOURCE)], "s_file")
     build(Path(SWITCHER_C_OBJECT), [Path(SWITCHER_C_SOURCE)], "O2_cc")
     o_files += [SWITCHER_C_ENTRY_OBJECT, SWITCHER_C_OBJECT]
